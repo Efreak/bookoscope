@@ -2,47 +2,108 @@ version: "3.8"
 
 services:
   flutter-builder:
-    image: cirrusci/flutter:stable   # Flutter image with Android SDK preinstalled
+    image: cirrusci/flutter:stable
     container_name: flutter_builder
-    build: false
     working_dir: /workspace
     volumes:
       - ./:/workspace:cached
       - flutter_build_output:/workspace/build_output
-      # Optional: if you have a keystore for signing
-      - ./keystore:/workspace/keystore:ro
-      # Optional: Android SDK cache to speed builds
-      - flutter_sdk_cache:/root/.pub-cache
+      - flutter_cache:/root/.pub-cache
+      - gradle_cache:/root/.gradle
     environment:
-      # Set JAVA_HOME if needed by the image; otherwise remove
+      - GRADLE_USER_HOME=/root/.gradle
       - JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
-      # Use GRADLE_USER_HOME on the mounted cache to persist Gradle downloads
-      - GRADLE_USER_HOME=/workspace/.gradle
-      # Optional: export keystore info for signing (replace values or set via env file)
-      - ANDROID_KEYSTORE=/workspace/keystore/keystore.jks
-      - ANDROID_KEYSTORE_PASSWORD=changeit
-      - ANDROID_KEY_ALIAS=key0
-      - ANDROID_KEY_PASSWORD=changeit
     command: >
       /bin/sh -c "
         set -eux;
-        # Accept Android SDK licenses if not already accepted
+
+        # Accept Android licenses
         yes | sdkmanager --licenses || true;
-        # Ensure flutter dependencies
+
+        # Ensure Flutter is ready
         flutter channel stable;
         flutter upgrade --force;
         flutter pub get;
-        # Clean previous build
+
+        # Clean
         flutter clean || true;
-        # Build release APK (use build apk --release) or bundle
-        flutter build apk --release --target-platform android-arm,android-arm64,android-x64 --build-number=1 --build-name=1.0.0 || exit 1;
-        # Copy output to build_output host-mounted folder
-        mkdir -p /workspace/build_output/apk;
-        cp -r build/app/outputs/flutter-apk/*.apk /workspace/build_output/apk/ || true;
-        # Also copy app bundle if produced
-        mkdir -p /workspace/build_output/aab;
-        cp -r build/app/outputs/bundle/release/*.aab /workspace/build_output/aab/ || true;
-        echo 'Build completed. Artifacts in /workspace/build_output/';
+
+        # Generate a temporary keystore (throwaway)
+        KEYSTORE_DIR=/workspace/tmp_keystore
+        mkdir -p \"$KEYSTORE_DIR\"
+        KEYSTORE_PATH=\"$KEYSTORE_DIR/keystore.jks\"
+        KEY_ALIAS=tmpkey
+        KEYSTORE_PASS=android
+        KEY_PASS=android
+
+        # Only generate if not already present in this workspace (idempotent per-workspace)
+        if [ ! -f \"$KEYSTORE_PATH\" ]; then
+          keytool -genkeypair -v \
+            -keystore \"$KEYSTORE_PATH\" \
+            -storepass \"$KEYSTORE_PASS\" \
+            -keypass \"$KEY_PASS\" \
+            -alias \"$KEY_ALIAS\" \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname \"CN=Temporary, OU=Dev, O=Dev, L=Earth, S=State, C=US\"
+        fi
+
+        # Create gradle.properties with signing config pointing to the temp keystore
+        echo 'storePassword=$KEYSTORE_PASS' > /workspace/tmp_keystore/keystore.properties
+        echo 'keyPassword=$KEY_PASS' >> /workspace/tmp_keystore/keystore.properties
+        echo 'keyAlias=$KEY_ALIAS' >> /workspace/tmp_keystore/keystore.properties
+        echo \"storeFile=$KEYSTORE_PATH\" >> /workspace/tmp_keystore/keystore.properties
+
+        # Ensure android/app/build.gradle reads signing config from keystore.properties.
+        # If build.gradle doesn't already use it, create a small snippet file to be included.
+        # Write a helper gradle script that merges properties if possible.
+        cat > /workspace/tmp_keystore/signing.gradle <<'GRADLE'
+        ext.keystorePropertiesFile = rootProject.file('tmp_keystore/keystore.properties')
+        def keystoreProperties = new Properties()
+        if (keystorePropertiesFile.exists()) {
+          keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+        }
+        android {
+          if (project.hasProperty('android')) {
+            signingConfigs {
+              tempConfig {
+                storeFile file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+              }
+            }
+            buildTypes {
+              release {
+                signingConfig signingConfigs.tempConfig
+              }
+            }
+          }
+        }
+        GRADLE
+
+        # If android/app/build.gradle exists, try to include the signing.gradle snippet (idempotent)
+        if [ -f /workspace/android/app/build.gradle ]; then
+          if ! grep -q \"apply from: '../tmp_keystore/signing.gradle'\" /workspace/android/app/build.gradle; then
+            echo -e \"\\n// Injected by docker builder for temporary signing\\napply from: '../tmp_keystore/signing.gradle'\\n\" >> /workspace/android/app/build.gradle
+          fi
+        fi
+
+        # Build release APK and app bundle
+        flutter build apk --release --target-platform android-arm,android-arm64,android-x64 --build-number=1 --build-name=1.0.0;
+        flutter build appbundle --release --build-number=1 --build-name=1.0.0 || true;
+
+        # Copy artifacts to host-mounted build_output
+        mkdir -p /workspace/build_output/apk
+        mkdir -p /workspace/build_output/aab
+        cp -v build/app/outputs/flutter-apk/*.apk /workspace/build_output/apk/ || true
+        cp -v build/app/outputs/bundle/release/*.aab /workspace/build_output/aab/ || true
+
+        # Save the temp keystore and properties for inspection (optional)
+        mkdir -p /workspace/build_output/keystore
+        cp -v \"$KEYSTORE_PATH\" /workspace/build_output/keystore/ || true
+        cp -v /workspace/tmp_keystore/keystore.properties /workspace/build_output/keystore/ || true
+
+        echo 'Build finished. Artifacts are in ./build_output on the host.';
         sleep 2;
         exec tail -f /dev/null
       "
@@ -52,4 +113,5 @@ services:
 
 volumes:
   flutter_build_output:
-  flutter_sdk_cache:
+  flutter_cache:
+  gradle_cache:
