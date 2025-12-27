@@ -1,43 +1,55 @@
 version: "3.8"
 
 services:
-  bookoscope:
-    build:
-      context: .
-      # If the repo has a subfolder with Dockerfile, set dockerfile: path/Dockerfile
-      # dockerfile: Dockerfile
-      args:
-        # example build-arg (remove if not used)
-        # PYTHONUNBUFFERED: "1"
-    image: bookoscope:latest
-    container_name: bookoscope
-    restart: unless-stopped
-    ports:
-      - "8080:8080"    # change to the port the app listens on
-    environment:
-      # Example environment variables — replace with real ones from the repo's README
-      - ENV=production
-      - DATABASE_URL=postgres://bookoscope:password@db:5432/bookoscope
-      - PORT=8080
-    depends_on:
-      - db
+  flutter-builder:
+    image: cirrusci/flutter:stable   # Flutter image with Android SDK preinstalled
+    container_name: flutter_builder
+    build: false
+    working_dir: /workspace
     volumes:
-      - ./:/app:cached   # optional: mount source for local dev; remove for production
+      - ./:/workspace:cached
+      - flutter_build_output:/workspace/build_output
+      # Optional: if you have a keystore for signing
+      - ./keystore:/workspace/keystore:ro
+      # Optional: Android SDK cache to speed builds
+      - flutter_sdk_cache:/root/.pub-cache
+    environment:
+      # Set JAVA_HOME if needed by the image; otherwise remove
+      - JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+      # Use GRADLE_USER_HOME on the mounted cache to persist Gradle downloads
+      - GRADLE_USER_HOME=/workspace/.gradle
+      # Optional: export keystore info for signing (replace values or set via env file)
+      - ANDROID_KEYSTORE=/workspace/keystore/keystore.jks
+      - ANDROID_KEYSTORE_PASSWORD=changeit
+      - ANDROID_KEY_ALIAS=key0
+      - ANDROID_KEY_PASSWORD=changeit
     command: >
-      sh -c "exec ./start.sh"   # replace with the actual run command, e.g. "gunicorn app:app --bind 0.0.0.0:8080"
-
-  db:
-    image: postgres:15
-    container_name: bookoscope_db
-    restart: unless-stopped
-    environment:
-      - POSTGRES_DB=bookoscope
-      - POSTGRES_USER=bookoscope
-      - POSTGRES_PASSWORD=password
-    volumes:
-      - bookoscope_db_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"   # optional for local access
+      /bin/sh -c "
+        set -eux;
+        # Accept Android SDK licenses if not already accepted
+        yes | sdkmanager --licenses || true;
+        # Ensure flutter dependencies
+        flutter channel stable;
+        flutter upgrade --force;
+        flutter pub get;
+        # Clean previous build
+        flutter clean || true;
+        # Build release APK (use build apk --release) or bundle
+        flutter build apk --release --target-platform android-arm,android-arm64,android-x64 --build-number=1 --build-name=1.0.0 || exit 1;
+        # Copy output to build_output host-mounted folder
+        mkdir -p /workspace/build_output/apk;
+        cp -r build/app/outputs/flutter-apk/*.apk /workspace/build_output/apk/ || true;
+        # Also copy app bundle if produced
+        mkdir -p /workspace/build_output/aab;
+        cp -r build/app/outputs/bundle/release/*.aab /workspace/build_output/aab/ || true;
+        echo 'Build completed. Artifacts in /workspace/build_output/';
+        sleep 2;
+        exec tail -f /dev/null
+      "
+    tty: true
+    stdin_open: true
+    restart: "no"
 
 volumes:
-  bookoscope_db_data:
+  flutter_build_output:
+  flutter_sdk_cache:
