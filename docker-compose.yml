@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  bookoscope:
+    build:
+      context: .
+      # If the repo has a subfolder with Dockerfile, set dockerfile: path/Dockerfile
+      # dockerfile: Dockerfile
+      args:
+        # example build-arg (remove if not used)
+        # PYTHONUNBUFFERED: "1"
+    image: bookoscope:latest
+    container_name: bookoscope
+    restart: unless-stopped
+    ports:
+      - "8080:8080"    # change to the port the app listens on
+    environment:
+      # Example environment variables — replace with real ones from the repo's README
+      - ENV=production
+      - DATABASE_URL=postgres://bookoscope:password@db:5432/bookoscope
+      - PORT=8080
+    depends_on:
+      - db
+    volumes:
+      - ./:/app:cached   # optional: mount source for local dev; remove for production
+    command: >
+      sh -c "exec ./start.sh"   # replace with the actual run command, e.g. "gunicorn app:app --bind 0.0.0.0:8080"
+
+  db:
+    image: postgres:15
+    container_name: bookoscope_db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=bookoscope
+      - POSTGRES_USER=bookoscope
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - bookoscope_db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"   # optional for local access
+
+volumes:
+  bookoscope_db_data:
