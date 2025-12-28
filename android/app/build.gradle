@@ -28,6 +28,10 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
 }
 
+tasks.withType(JavaCompile).configureEach {
+    options.fork = true
+}
+
 android {
     namespace "com.example.app"
     compileSdkVersion flutter.compileSdkVersion
