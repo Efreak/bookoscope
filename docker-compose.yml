@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   flutter-builder:
-    image: cirrusci/flutter:stable
+    image: ghcr.io/cirruslabs/flutter
     container_name: flutter_builder
     working_dir: /workspace
     volumes:
@@ -12,117 +12,10 @@ services:
       - gradle_cache:/root/.gradle
     environment:
       - GRADLE_USER_HOME=/root/.gradle
-      - JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
       # Prevent Flutter from prompting for analytics during first run
       - FLUTTER_SUPPRESS_ANALYTICS=true
-    command: >
-      /bin/sh -c "
-        set -eux;
-
-        # Accept Android licenses
-        yes | sdkmanager --licenses || true;
-
-        # Get dependencies without attempting to change Flutter channel
-        flutter --version;
-        flutter pub get;
-
-        # Clean previous builds
-        flutter clean || true;
-
-        # Create temporary keystore and signing properties inside workspace (idempotent)
-        KEYSTORE_DIR=/workspace/tmp_keystore
-        mkdir -p \"$KEYSTORE_DIR\"
-        KEYSTORE_PATH=\"$KEYSTORE_DIR/keystore.jks\"
-        KEY_ALIAS=tmpkey
-        KEYSTORE_PASS=android
-        KEY_PASS=android
-
-        # Only generate if not already present in this workspace (idempotent per-workspace)
-        if [ ! -f \"$KEYSTORE_PATH\" ]; then
-          keytool -genkeypair -v \
-            -keystore \"$KEYSTORE_PATH\" \
-            -storepass \"$KEYSTORE_PASS\" \
-            -keypass \"$KEY_PASS\" \
-            -alias \"$KEY_ALIAS\" \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname \"CN=Temporary, OU=Dev, O=Dev, L=Earth, S=State, C=US\"
-        fi
-
-        # Create gradle.properties with signing config pointing to the temp keystore
-        echo 'storePassword=$KEYSTORE_PASS' > /workspace/tmp_keystore/keystore.properties
-        echo 'keyPassword=$KEY_PASS' >> /workspace/tmp_keystore/keystore.properties
-        echo 'keyAlias=$KEY_ALIAS' >> /workspace/tmp_keystore/keystore.properties
-        echo \"storeFile=$KEYSTORE_PATH\" >> /workspace/tmp_keystore/keystore.properties
-
-        # Create an isolated Gradle script to apply signing config at build time without mutating project files.
-        # We'll instruct Gradle via --init-script to apply this signing config.
-        INIT_GRADLE=/workspace/tmp_keystore/init-signing.gradle
-
-        echo "allprojects {" > "$INIT_GRADLE"
-        echo "  afterEvaluate { project ->" >> "$INIT_GRADLE"
-        echo "    if (project.hasProperty('android')) {" >> "$INIT_GRADLE"
-        echo "      def propsFile = rootProject.file('tmp_keystore/keystore.properties')" >> "$INIT_GRADLE"
-        echo "      if (propsFile.exists()) {" >> "$INIT_GRADLE"
-        echo "        def keystoreProps = new Properties()" >> "$INIT_GRADLE"
-        echo "        keystoreProps.load(new FileInputStream(propsFile))" >> "$INIT_GRADLE"
-        echo "        android {" >> "$INIT_GRADLE"
-        echo "          signingConfigs {" >> "$INIT_GRADLE"
-        echo "            tempConfig {" >> "$INIT_GRADLE"
-        echo "              storeFile file(keystoreProps['storeFile'])" >> "$INIT_GRADLE"
-        echo "              storePassword keystoreProps['storePassword']" >> "$INIT_GRADLE"
-        echo "              keyAlias keystoreProps['keyAlias']" >> "$INIT_GRADLE"
-        echo "              keyPassword keystoreProps['keyPassword']" >> "$INIT_GRADLE"
-        echo "            }" >> "$INIT_GRADLE"
-        echo "          }" >> "$INIT_GRADLE"
-        echo "          buildTypes {" >> "$INIT_GRADLE"
-        echo "            release {" >> "$INIT_GRADLE"
-        echo "              signingConfig signingConfigs.tempConfig" >> "$INIT_GRADLE"
-        echo "            }" >> "$INIT_GRADLE"
-        echo "          }" >> "$INIT_GRADLE"
-        echo "        }" >> "$INIT_GRADLE"
-        echo "      }" >> "$INIT_GRADLE"
-        echo "    }" >> "$INIT_GRADLE"
-        echo "  }" >> "$INIT_GRADLE"
-        echo "}" >> "$INIT_GRADLE"
-
-        ## Build release APK and app bundle
-        #flutter build apk --release --target-platform android-arm,android-arm64,android-x64 --build-number=1 --build-name=1.0.0;
-        #flutter build appbundle --release --build-number=1 --build-name=1.0.0 || true;
-
-        # Build release APK and AAB; pass --no-shrink to avoid R8 issues on some projects (safe default).
-        # Use init script so we don't need to alter android/app/build.gradle in the repo.
-        flutter build apk --release --no-shrink --build-number=1 --build-name=1.0.0 --target-platform android-arm,android-arm64,android-x64 --local-engine-src-path= || true
-        # If the above fails for target-platform, try default:
-        if [ $? -ne 0 ]; then
-          flutter build apk --release --no-shrink --build-number=1 --build-name=1.0.0 || true
-        fi
-
-        # Build app bundle (recommended) using Gradle init script to apply signing without repo changes
-        # Locate the android gradle wrapper and run with init script
-        if [ -d /workspace/android ]; then
-          (cd /workspace/android && \
-            ./gradlew bundleRelease --no-daemon -g /root/.gradle -Dorg.gradle.jvmargs='-Xmx1536m' --init-script \"$INIT_GRADLE\" ) || true
-        fi
-
-        # Collect outputs
-        mkdir -p /workspace/build_output/apk
-        mkdir -p /workspace/build_output/aab
-        cp -v /workspace/build/app/outputs/flutter-apk/*.apk /workspace/build_output/apk/ 2>/dev/null || true
-        cp -v /workspace/build/app/outputs/bundle/release/*.aab /workspace/build_output/aab/ 2>/dev/null || true
-        # Also collect any Gradle-produced bundle outputs
-        cp -v /workspace/android/app/build/outputs/bundle/release/*.aab /workspace/build_output/aab/ 2>/dev/null || true
-        cp -v /workspace/android/app/build/outputs/apk/release/*.apk /workspace/build_output/apk/ 2>/dev/null || true
-
-        # Save the temp keystore and properties for debugging (throwaway)
-        mkdir -p /workspace/build_output/keystore
-        cp -v \"$KEYSTORE_PATH\" /workspace/build_output/keystore/ || true
-        cp -v /workspace/tmp_keystore/keystore.properties /workspace/build_output/keystore/ || true
-
-        echo 'Build finished. Artifacts are in ./build_output on the host.';
-        sleep 2;
-        # Keep container running briefly so logs are visible; then exit
-        tail -n +1 /workspace/build_output/* 2>/dev/null || true
-      "
+      
+    command: bash build.sh
     tty: true
     stdin_open: true
     restart: "no"
