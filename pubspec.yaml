@@ -9,12 +9,12 @@ environment:
 dependencies:
   accordion: ^2.6.0
   auto_size_text: ^3.0.0
-  collection: ^1.18.0
+  collection: ^1.19.1
   csv: ^5.1.1
   flutter:
     sdk: flutter
   go_router: ^12.1.3
-  in_app_review: ^2.0.10
+  in_app_review: ^2.0.11
   isar:
       git:
         url: https://github.com/hamidhandid/isar
@@ -27,11 +27,11 @@ dependencies:
         path: packages/isar_flutter_libs
   json_annotation: ^4.9.0
   mockito: ^5.4.4
-  path_provider: ^2.1.4
-  provider: ^6.1.2
-  shared_preferences: ^2.3.3
-  url_launcher: ^6.3.1
-  xml: ^6.5.0
+  path_provider: ^2.1.5
+  provider: ^6.1.5+1
+  shared_preferences: ^2.5.4
+  url_launcher: ^6.3.2
+  xml: ^6.6.1
 
 dev_dependencies:
   auto_screenshot:
@@ -43,7 +43,7 @@ dev_dependencies:
   flutter_lints: ^3.0.2
   json_serializable: ^6.8.0
   path: 1.9.1
-  flutter_launcher_icons: ^0.14.1
+  flutter_launcher_icons: ^0.14.4
   isar_generator:
       git:
         url: https://github.com/hamidhandid/isar
